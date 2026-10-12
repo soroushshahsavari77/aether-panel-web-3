@@ -395,8 +395,9 @@ async function handleShadowsocks(client: net.Socket, listener: string, ctx: Gate
       client.once("close", () => up.sock.destroy())
       up.sock.on("error", () => client.destroy())
       up.sock.on("close", () => client.destroy())
-      up.sock.on("data", (d) => {
-        if (!client.write(enc.seal(d))) {
+      up.sock.on("data", (d: Buffer | string) => {
+        const chunk: Buffer = typeof d === "string" ? Buffer.from(d) : d
+        if (!client.write(enc.seal(chunk))) {
           up.sock.pause()
           client.once("drain", () => up.sock.resume())
         }

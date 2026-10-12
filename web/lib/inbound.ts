@@ -75,7 +75,7 @@ interface Frame {
 }
 
 export class FrameParser {
-  private buf = Buffer.alloc(0)
+  private buf: Buffer = Buffer.alloc(0)
 
   /** Returns complete frames. Throws on protocol violations (unmasked client frame, oversized frame). */
   push(chunk: Buffer): Frame[] {
@@ -354,8 +354,9 @@ function runSession(socket: net.Socket, head: Buffer, early: Buffer | null, rt: 
       upstream = up.sock
       up.sock.on("error", () => closeWs(1011))
       up.sock.on("close", () => closeWs(1000))
-      up.sock.on("data", (d) => {
-        if (!socket.write(encodeFrame(2, d))) {
+      up.sock.on("data", (d: Buffer | string) => {
+        const chunk: Buffer = typeof d === "string" ? Buffer.from(d) : d
+        if (!socket.write(encodeFrame(2, chunk))) {
           up.sock.pause()
           socket.once("drain", () => up.sock.resume())
         }
