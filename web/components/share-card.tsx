@@ -102,6 +102,7 @@ function RelaySection({ relay }: { relay: RelayInfo }) {
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-medium" dir="auto">
           {relay.label}
+          {relay.tier === "fallback" && <span className="ms-2 text-xs font-normal text-muted">جایگزین</span>}
         </h3>
         <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs ${tone}`}>{PHASE_TEXT[relay.phase]}</span>
       </div>
@@ -135,18 +136,21 @@ function RelaySection({ relay }: { relay: RelayInfo }) {
 interface Draft {
   username: string
   password: string
+  port: string
   auto: boolean
 }
 
 const toDraft = (s: ShareSettings): Draft => ({
   username: s.username,
   password: s.password,
+  port: s.port ? String(s.port) : "",
   auto: s.auto,
 })
 
 const toPayload = (d: Draft): ShareSettings => ({
   username: d.username.trim(),
   password: d.password.trim(),
+  port: d.port.trim() === "" ? null : Number(d.port),
   auto: d.auto,
 })
 
@@ -286,6 +290,22 @@ export function ShareCard({
             </div>
           </label>
 
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs text-muted">پورت ثابت روی bore (خالی = تصادفی)</span>
+            <input
+              dir="ltr"
+              type="number"
+              inputMode="numeric"
+              min={1024}
+              max={65535}
+              placeholder="مثلاً 33911"
+              value={draft.port}
+              disabled={active}
+              onChange={(e) => set("port", e.target.value)}
+              className={inputClass}
+            />
+          </label>
+
           <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3">
             <span className="flex flex-col">
               <span className="text-sm font-medium">شروع خودکار</span>
@@ -302,7 +322,7 @@ export function ShareCard({
 
           <p className="text-xs leading-relaxed text-muted">
             نام کاربری و رمز فقط حروف انگلیسی، عدد و <span dir="ltr">. _ ~ -</span> می‌پذیرند. مقدارها ذخیره می‌شوند و با قطع و وصل
-            شدن عوض نمی‌شوند.
+            شدن عوض نمی‌شوند. پورت ثابت فقط برای bore است و فقط وقتی کار می‌کند که آن پورت روی رله‌ی عمومی آزاد باشد.
           </p>
 
           <button
