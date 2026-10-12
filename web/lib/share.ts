@@ -1,4 +1,5 @@
 import "server-only"
+import type { ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import type { IncomingMessage } from "node:http"
@@ -15,9 +16,12 @@ import {
   loadInboundConfig,
   loadRelayConfig,
   RELAY_LABELS,
+  tierOf,
+  type ProviderConfig,
   type RelayConfig,
   type RelayKind,
 } from "./relay"
+import { launch, planTunnel } from "./tunnels"
 import { parseShareSettings, type RelayInfo, type RelayLinkInfo, type RelayPhase, type ShareSettings, type ShareStatus } from "./types"
 
 // Serverless deployments expose /var/task as the working directory, which is read-only.
@@ -26,14 +30,33 @@ import { parseShareSettings, type RelayInfo, type RelayLinkInfo, type RelayPhase
 const SHARE_DIR = path.join(os.tmpdir(), ".aether")
 const SETTINGS_FILE = path.join(SHARE_DIR, "share-settings.json")
 const URIS_FILE = path.join(SHARE_DIR, "share-uris.json")
+const RETRY_DELAYS_MS = [3_000, 5_000, 10_000, 20_000, 30_000]
+const FALLBACK_CHECK_MS = 20_000
 
 /**
- * Every relay is independent. The only thing they share is the local gateway (the authenticated multi-protocol
- * proxy in front of the Aether SOCKS5), which is created once per share session.
+ * Every relay is independent. A relay has its own phase, process, retry timer and error; starting, failing,
+ * reconnecting or stopping one never touches another. The only thing they share is the local gateway (the
+ * authenticated multi-protocol proxy in front of the Aether SOCKS5), which is created once per share session.
  *
- *   railway  - the gateway bound to RELAY_PORT behind Railway's TCP Proxy, or exposed on your own VPS
- *   ws       - VLESS/Trojan over WebSocket on the panel's own HTTP port (edge TLS, 443)
+ *   railway  - the gateway bound to RELAY_PORT behind Railway's TCP Proxy (no process, no bore involved)
+ *   ws       - VLESS/Trojan over WebSocket on the panel's own HTTP port (Railway edge, 443)
+ *   bore / playit / pinggy / ngrok / chisel / frp / rathole - primary tunnels
+ *   serveo / localtonet - fallback tunnels: only run while no primary relay is live
  */
+interface RelayRuntime {
+  kind: RelayKind
+  phase: RelayPhase
+  proc: ChildProcess | null
+  retryTimer: ReturnType<typeof setTimeout> | null
+  attempt: number
+  /** Bumped on every start/stop so callbacks of an older run are ignored. */
+  gen: number
+  host: string | null
+  port: number | null
+  scheme: "tcp" | "tls" | "https" | null
+  error: string | null
+}
+
 interface ShareState {
   /** The user (or auto-start) wants sharing on; the relays keep themselves alive while true. */
   wanted: boolean
@@ -49,6 +72,8 @@ interface ShareState {
   fatal: string | null
   railwayServer: net.Server | null
   railwayError: string | null
+  relays: Map<RelayKind, RelayRuntime>
+  fallbackTimer: ReturnType<typeof setInterval> | null
   /** Last announced signature of every relay's links (also persisted next to the settings). */
   announced: Record<string, string>
 }
@@ -101,9 +126,10 @@ function loadSettings(): ShareSettings {
   const fromEnv = parseShareSettings({
     username: process.env.SHARE_USERNAME || random.username,
     password: process.env.SHARE_PASSWORD || random.password,
+    port: process.env.SHARE_PORT || null,
     auto: ["1", "true"].includes((process.env.SHARE_AUTO ?? "").toLowerCase()),
   })
-  const value: ShareSettings = fromEnv.ok ? fromEnv.value : { ...random, auto: false }
+  const value: ShareSettings = fromEnv.ok ? fromEnv.value : { ...random, port: null, auto: false }
   persistSettings(value)
   return value
 }
@@ -123,6 +149,8 @@ const state: ShareState = (globalForShare.__aetherShare2 ??= {
   fatal: null,
   railwayServer: null,
   railwayError: null,
+  relays: new Map(),
+  fallbackTimer: null,
   announced: loadAnnounced(),
 })
 
@@ -236,15 +264,143 @@ function closeGateway() {
   })
 }
 
+// ---- Tunnel relays (one supervisor per provider) -----------------------------------------------------------
+
+function runtime(kind: RelayKind): RelayRuntime {
+  let r = state.relays.get(kind)
+  if (!r) {
+    r = { kind, phase: "off", proc: null, retryTimer: null, attempt: 0, gen: 0, host: null, port: null, scheme: null, error: null }
+    state.relays.set(kind, r)
+  }
+  return r
+}
+
+const stale = (r: RelayRuntime, gen: number) => !state.wanted || state.stopRequested || r.gen !== gen
+
+function stopRelay(kind: RelayKind, next: RelayPhase = "off") {
+  const r = runtime(kind)
+  r.gen += 1
+  if (r.retryTimer) clearTimeout(r.retryTimer)
+  r.retryTimer = null
+  const proc = r.proc
+  r.proc = null
+  proc?.kill("SIGTERM")
+  r.attempt = 0
+  r.host = null
+  r.port = null
+  r.scheme = null
+  r.error = null
+  r.phase = next
+}
+
+function scheduleRetry(cfg: ProviderConfig, gen: number) {
+  const r = runtime(cfg.kind)
+  if (stale(r, gen)) return
+  if (r.retryTimer) clearTimeout(r.retryTimer)
+  const delay = RETRY_DELAYS_MS[Math.min(r.attempt, RETRY_DELAYS_MS.length - 1)]
+  r.attempt += 1
+  r.retryTimer = setTimeout(() => {
+    r.retryTimer = null
+    if (stale(r, gen)) return
+    if (cfg.tier === "fallback" && primaryLive()) {
+      stopRelay(cfg.kind, "standby")
+      return
+    }
+    void startRelay(cfg)
+  }, delay)
+}
+
+/** One start attempt of one relay. Never throws: failures become that relay's own error + retry. */
+async function startRelay(cfg: ProviderConfig): Promise<void> {
+  const r = runtime(cfg.kind)
+  if (r.proc) return
+  const gen = ++r.gen
+  const label = RELAY_LABELS[cfg.kind]
+  r.phase = r.attempt > 0 ? "reconnecting" : "starting"
+  r.error = null
+  try {
+    if (cfg.needsLocalPort && !state.cfg?.gateway.localPort) {
+      throw new Error("a fixed local port is required: set GATEWAY_PORT and point the provider's tunnel at 127.0.0.1:GATEWAY_PORT")
+    }
+    if (state.gatewayPort == null) throw new Error("gateway is not running")
+    const plan = await planTunnel(cfg, {
+      dir: SHARE_DIR,
+      gatewayPort: state.gatewayPort,
+      panelPort: Number(process.env.PORT) || 3000,
+      fixedPort: cfg.kind === "bore" ? state.settings.port : null,
+    })
+    if (stale(r, gen)) return
+    const launched = launch(plan, {
+      onExit: ({ wasReady }) => {
+        if (r.proc === launched.proc) r.proc = null
+        if (!wasReady || stale(r, gen)) return
+        // The tunnel dropped after it was working: keep trying while sharing is wanted.
+        r.phase = "reconnecting"
+        r.host = null
+        r.port = null
+        r.scheme = null
+        r.error = "connection lost; reconnecting…"
+        void notify("relay_error", `⚠️ The ${label} relay connection dropped; reconnecting.`, { key: `${cfg.kind}-dropped` })
+        scheduleRetry(cfg, gen)
+        evaluateFallbacks()
+      },
+    })
+    r.proc = launched.proc
+    const ep = await launched.ready
+    if (stale(r, gen)) {
+      launched.proc.kill("SIGTERM")
+      return
+    }
+    r.host = ep.host
+    r.port = ep.port
+    r.scheme = ep.scheme
+    r.phase = "on"
+    r.error = null
+    r.attempt = 0
+    announceUris()
+    evaluateFallbacks()
+  } catch (err) {
+    if (stale(r, gen)) return
+    r.proc?.kill("SIGTERM")
+    r.proc = null
+    r.phase = "error"
+    r.error = (err as Error).message
+    void notify("relay_error", `⚠️ ${label} relay failed: ${r.error}`, { key: `${cfg.kind}-fail` })
+    scheduleRetry(cfg, gen)
+    evaluateFallbacks()
+  }
+}
+
+/** Fallback relays (Serveo, LocalToNet) run only while NO primary relay is live. */
+function evaluateFallbacks() {
+  if (!state.wanted || state.stopRequested || !state.cfg) return
+  const live = primaryLive()
+  for (const cfg of state.cfg.providers) {
+    if (cfg.tier !== "fallback" || !cfg.enabled) continue
+    const r = runtime(cfg.kind)
+    if (live) {
+      if (r.phase !== "standby" && r.phase !== "off") stopRelay(cfg.kind, "standby")
+      else r.phase = "standby"
+    } else if ((r.phase === "standby" || r.phase === "off") && !r.proc && !r.retryTimer) {
+      void startRelay(cfg)
+    }
+  }
+}
+
+function primaryLive() {
+  return buildRelays().some((x) => x.tier === "primary" && x.enabled && x.phase === "on")
+}
+
 export async function startShare(upstreamPort: number) {
   if (state.wanted) {
     state.upstreamPort = upstreamPort
     return
   }
   const cfg = loadRelayConfig()
+  const providers = cfg.providers.filter((p) => p.enabled)
   const wsUsable = cfg.inbound.enabled && Boolean(cfg.inbound.publicHost)
-  if (!cfg.enabled && !wsUsable) {
-    const message = "No relay is enabled: set RELAY_PORT (Railway TCP Proxy / VPS) or enable the panel WebSocket domain (see .env.example)."
+  if (!cfg.enabled && !wsUsable && providers.length === 0) {
+    const message = "No relay is enabled: set RELAY_PORT (Railway TCP Proxy), enable the panel WebSocket domain, or configure a tunnel provider (see .env.example)."
     state.fatal = message
     throw new Error(message)
   }
@@ -280,12 +436,29 @@ export async function startShare(upstreamPort: number) {
     }
   }
 
+  for (const p of cfg.providers) {
+    const r = runtime(p.kind)
+    r.attempt = 0
+    r.phase = p.enabled ? (p.tier === "fallback" ? "standby" : "starting") : "off"
+  }
+
+  // Every primary tunnel starts on its own; a failure only affects that provider.
+  await Promise.allSettled(providers.filter((p) => p.tier === "primary").map((p) => startRelay(p)))
+  if (!state.wanted) return
   announceUris()
+  if (!state.fallbackTimer) {
+    state.fallbackTimer = setInterval(evaluateFallbacks, FALLBACK_CHECK_MS)
+    state.fallbackTimer.unref?.()
+  }
+  evaluateFallbacks()
 }
 
 export async function stopShare() {
   state.wanted = false
   state.stopRequested = true
+  if (state.fallbackTimer) clearInterval(state.fallbackTimer)
+  state.fallbackTimer = null
+  for (const kind of Array.from(state.relays.keys())) stopRelay(kind)
   await closeGateway()
   state.fatal = null
   state.railwayError = null
@@ -313,7 +486,7 @@ function toLinkInfo(links: ReturnType<typeof buildLinks>["links"]): RelayLinkInf
 }
 
 function baseInfo(kind: RelayKind, enabled: boolean, phase: RelayPhase): RelayInfo {
-  return { id: kind, label: RELAY_LABELS[kind], enabled, phase, host: null, port: null, links: [], clientBlock: null, warning: null, error: null }
+  return { id: kind, label: RELAY_LABELS[kind], tier: tierOf(kind), enabled, phase, host: null, port: null, links: [], clientBlock: null, warning: null, error: null }
 }
 
 function railwayInfo(cfg: RelayConfig): RelayInfo {
@@ -354,9 +527,39 @@ function wsInfo(cfg: RelayConfig): RelayInfo {
   }
 }
 
+function providerInfo(cfg: ProviderConfig, relayCfg: RelayConfig): RelayInfo {
+  const r = state.relays.get(cfg.kind)
+  const info = baseInfo(cfg.kind, cfg.enabled, "off")
+  const warning = cfg.warnings[0] ?? null
+  if (!cfg.enabled) return { ...info, warning }
+  if (!state.wanted || !r) return { ...info, warning }
+  const out: RelayInfo = { ...info, phase: r.phase, warning, error: r.error, host: r.phase === "on" ? r.host : null, port: r.phase === "on" ? r.port : null }
+  if (r.phase !== "on" || !r.host || !r.port) return out
+
+  const { username, password } = state.settings
+  if (cfg.kind === "pinggy" && cfg.opts.mode === "ws") {
+    // HTTP tunnel to the panel port: serves the WebSocket inbound on https://<host>/<path>.
+    const inbound = { ...relayCfg.inbound, enabled: true, publicHost: r.host, publicPort: 443, tls: true }
+    const links = buildInboundLinks(inbound, deriveInbound(username, password, relayCfg.inbound.path), password, "Aether-Pinggy")
+    return { ...out, links: links.map((l) => ({ protocol: l.protocol, label: l.label, uri: l.uri, extra: null, encrypted: true })), clientBlock: links.map((l) => `${l.label}: ${l.uri}`).join("\n") }
+  }
+  const l = buildLinks({
+    host: r.host,
+    port: r.port,
+    username,
+    password,
+    name: cfg.kind === "bore" ? "Aether" : `Aether-${cfg.kind}`,
+    protocols: relayCfg.gateway.protocols,
+    ssCipher: relayCfg.gateway.ssCipher,
+  })
+  return { ...out, links: toLinkInfo(l.links), clientBlock: l.clientBlock }
+}
+
 function buildRelays(): RelayInfo[] {
   const cfg = state.cfg ?? loadRelayConfig()
-  return [railwayInfo(cfg), wsInfo(cfg)]
+  const list: RelayInfo[] = [railwayInfo(cfg), wsInfo(cfg)]
+  for (const p of cfg.providers) list.push(providerInfo(p, cfg))
+  return list
 }
 
 /** Notifies (webhook / Telegram) when a relay's links are new or different from the last announced ones. */

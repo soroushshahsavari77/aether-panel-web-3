@@ -111,9 +111,36 @@ test("best-config request parsing keeps only valid values", () => {
   assert.deepEqual(parseBestRequest(null).scans, ["turbo", "balanced"])
 })
 
-test("relay config: inbound + gateway", async () => {
-  const { loadInboundConfig, loadGatewayConfig } = await import("../web/lib/relay.ts")
+test("relay providers: tiers, required variables and fallback-only relays", async () => {
+  const { loadProviders, loadInboundConfig, loadGatewayConfig, tierOf } = await import("../web/lib/relay.ts")
+  const get = (env: Record<string, string>, kind: string) => loadProviders(env).find((p) => p.kind === kind)!
 
+  assert.equal(get({}, "bore").enabled, true)
+  assert.equal(get({ SHARE_BORE: "0" }, "bore").enabled, false)
+  assert.equal(get({}, "serveo").enabled, false)
+  assert.equal(get({ SERVEO_ENABLE: "1" }, "serveo").tier, "fallback")
+  assert.equal(tierOf("localtonet"), "fallback")
+  assert.equal(tierOf("chisel"), "primary")
+  assert.equal(tierOf("ws"), "primary")
+
+  // playit / localtonet need the dashboard-assigned address
+  assert.equal(get({ PLAYIT_SECRET: "s" }, "playit").enabled, false)
+  const playit = get({ PLAYIT_SECRET: "s", PLAYIT_PUBLIC_ADDR: "abc.gl.at.ply.gg:1234" }, "playit")
+  assert.deepEqual([playit.enabled, playit.publicHost, playit.publicPort, playit.needsLocalPort], [true, "abc.gl.at.ply.gg", 1234, true])
+
+  // chisel: HTTP(S) server URL + remote port; public host defaults to the server host
+  const chisel = get({ CHISEL_SERVER: "https://edge.example.com:443", CHISEL_REMOTE_PORT: "8443", CHISEL_AUTH: "u:p" }, "chisel")
+  assert.deepEqual([chisel.enabled, chisel.publicHost, chisel.publicPort], [true, "edge.example.com", 8443])
+  assert.ok(get({ CHISEL_SERVER: "edge.example.com:80", CHISEL_REMOTE_PORT: "1" }, "chisel").warnings.some((w) => w.includes("https://")))
+  assert.equal(get({ CHISEL_SERVER: "https://x" }, "chisel").enabled, false)
+
+  assert.equal(get({ FRP_SERVER: "1.2.3.4:7000", FRP_REMOTE_PORT: "6000" }, "frp").enabled, true)
+  assert.equal(get({ FRP_SERVER: "1.2.3.4", FRP_REMOTE_PORT: "6000", FRP_TRANSPORT: "quic" }, "frp").enabled, false)
+  assert.equal(get({ RATHOLE_SERVER: "1.2.3.4:2333", RATHOLE_PUBLIC_ADDR: "1.2.3.4:5000" }, "rathole").enabled, true)
+  assert.equal(get({ NGROK_AUTHTOKEN: "t" }, "ngrok").enabled, true)
+  assert.equal(get({ PINGGY_TOKEN: "t", PINGGY_MODE: "bogus" }, "pinggy").enabled, false)
+
+  // inbound + gateway
   const inbound = loadInboundConfig({ RAILWAY_PUBLIC_DOMAIN: "x.up.railway.app" })
   assert.deepEqual([inbound.enabled, inbound.vless, inbound.trojan, inbound.publicHost, inbound.publicPort, inbound.tls], [true, true, true, "x.up.railway.app", 443, true])
   assert.equal(loadInboundConfig({ INBOUND_WS: "off" }).enabled, false)
@@ -148,7 +175,7 @@ test("inbound: identity is stable, links are importable, request headers parse",
   const cfg = { enabled: true, vless: true, trojan: true, path: null, publicHost: "p.example", publicPort: 443, tls: true, warnings: [] }
   const links = buildInboundLinks(cfg, a, "password1")
   assert.equal(links.length, 2)
-  assert.ok(links[1].uri.startsWith(`trojan://${a.uuid}@p.example:443?`))
+  assert.ok(links[1].uri.startsWith("trojan://password1@p.example?"))
   assert.deepEqual(buildInboundLinks({ ...cfg, publicHost: null }, a, "password1"), [])
 
   // incomplete header = need more bytes
