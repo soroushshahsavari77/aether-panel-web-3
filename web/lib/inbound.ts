@@ -17,7 +17,7 @@ const PING_MS = 25_000
 
 export interface InboundIdentity {
   uuid: string
-  /** hex(sha224(password)) as Trojan sends it. */
+  /** hex(sha224(uuid)) as Trojan sends it (the uuid is the Trojan credential). */
   trojanHash: string
   path: string
 }
@@ -28,7 +28,7 @@ export function deriveInbound(username: string, password: string, pathOverride: 
   h[8] = (h[8] & 0x3f) | 0x80
   const hex = h.subarray(0, 16).toString("hex")
   const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
-  const trojanHash = createHash("sha224").update(password).digest("hex")
+  const trojanHash = createHash("sha224").update(uuid).digest("hex")
   const path = pathOverride ?? `/ws/${createHash("sha256").update(`aether-path-v1:${password}`).digest("hex").slice(0, 12)}`
   return { uuid, trojanHash, path }
 }
@@ -39,26 +39,23 @@ export interface InboundLink {
   uri: string
 }
 
-export function buildInboundLinks(cfg: InboundConfig, ident: InboundIdentity, password: string, name = "Aether"): InboundLink[] {
+export function buildInboundLinks(cfg: InboundConfig, ident: InboundIdentity, _password: string, name = "Aether"): InboundLink[] {
   if (!cfg.enabled || !cfg.publicHost) return []
   const host = cfg.publicHost
-  const hostPort = cfg.publicPort === (cfg.tls ? 443 : 80) ? host : `${host}:${cfg.publicPort}`
-  const common = new URLSearchParams({ security: cfg.tls ? "tls" : "none", type: "ws", host, path: ident.path })
-  if (cfg.tls) {
-    common.set("sni", host)
-    common.set("fp", "chrome")
-    common.set("alpn", "http/1.1")
-  }
+  const path = encodeURIComponent(ident.path)
   const out: InboundLink[] = []
   if (cfg.vless) {
-    const q = new URLSearchParams({ encryption: "none", ...Object.fromEntries(common) })
-    out.push({ protocol: "vless-ws", label: "VLESS + WebSocket + TLS", uri: `vless://${ident.uuid}@${hostPort}?${q.toString()}#${encodeURIComponent(`${name}-VLESS-WS`)}` })
+    out.push({
+      protocol: "vless-ws",
+      label: "VLESS + WebSocket + TLS",
+      uri: `vless://${ident.uuid}@${host}:443?encryption=none&security=tls&insecure=0&type=ws&host=${host}&allowInsecure=0&alpn=http%2F1.1&sni=${host}&fp=chrome&path=${path}#${encodeURIComponent(`${name}-VLESS-WS`)}`,
+    })
   }
   if (cfg.trojan) {
     out.push({
       protocol: "trojan-ws",
       label: "Trojan + WebSocket + TLS",
-      uri: `trojan://${encodeURIComponent(password)}@${hostPort}?${common.toString()}#${encodeURIComponent(`${name}-Trojan-WS`)}`,
+      uri: `trojan://${ident.uuid}@${host}:443?allowInsecure=0&fp=chrome&host=${host}&type=ws&security=tls&sni=${host}&insecure=0&path=${path}&alpn=http%2F1.1#${encodeURIComponent(`${name}-Trojan-WS`)}`,
     })
   }
   return out

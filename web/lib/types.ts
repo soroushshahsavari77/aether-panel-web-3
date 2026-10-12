@@ -135,12 +135,10 @@ export interface RelayLinkInfo {
   encrypted: boolean
 }
 
-/** One independent relay (Railway TCP proxy, panel WebSocket inbound, bore, playit, pinggy, ngrok, chisel, frp, rathole, serveo, localtonet). */
+/** One independent relay (TCP relay on Railway / VPS, or the panel WebSocket inbound). */
 export interface RelayInfo {
   id: string
   label: string
-  /** fallback relays only start while no primary relay is live. */
-  tier: "primary" | "fallback"
   enabled: boolean
   phase: RelayPhase
   host: string | null
@@ -156,8 +154,6 @@ export interface RelayInfo {
 export interface ShareSettings {
   username: string
   password: string
-  /** Fixed remote port requested from the bore relay. null = let the relay pick a random one. */
-  port: number | null
   /** Start sharing automatically the first time the tunnel connects after it is started. */
   auto: boolean
 }
@@ -193,16 +189,7 @@ export function parseShareSettings(input: unknown): ParsedShareSettings {
   if (!SHARE_PASS_RE.test(password)) {
     return { ok: false, error: "رمز باید ۸ تا ۶۴ کاراکتر باشد و فقط حروف انگلیسی، عدد و . _ ~ - داشته باشد." }
   }
-  let port: number | null = null
-  const raw = o.port
-  if (raw !== null && raw !== undefined && raw !== "" && raw !== 0 && raw !== "0") {
-    const n = Number(raw)
-    if (!Number.isInteger(n) || n < 1024 || n > 65535) {
-      return { ok: false, error: "پورت باید بین ۱۰۲۴ تا ۶۵۵۳۵ باشد (یا برای انتخاب خودکار خالی بماند)." }
-    }
-    port = n
-  }
-  return { ok: true, value: { username, password, port, auto: o.auto === true } }
+  return { ok: true, value: { username, password, auto: o.auto === true } }
 }
 
 export interface TraceResult {

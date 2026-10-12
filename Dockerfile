@@ -7,7 +7,7 @@ ARG TARGETARCH
 ARG AETHER_VERSION=v1.5.0
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates tar gzip unzip openssh-client && \
+    apt-get install -y --no-install-recommends curl ca-certificates tar gzip unzip && \
     rm -rf /var/lib/apt/lists/*
 
 # Download the official static (musl) release and verify its checksum.

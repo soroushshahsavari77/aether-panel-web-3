@@ -41,7 +41,7 @@
 ## امکانات
 - شروع/توقف با یک دکمه؛ پروتکل (MASQUE، WireGuard، Gool، MiM)، ترنسپورت (h2/h3)، حالت اسکن، نسخه‌ی IP، noize، پورت، پراکسی HTTP و اتصال سریع
 - وضعیت زنده، gateway انتخاب‌شده، IP و کشور خروجی، تأخیر، مدت اتصال، لاگ و تست اتصال
-- **۱۱ رله‌ی مستقل:** Railway TCP Proxy، دامنه‌ی پنل (WebSocket روی ۴۴۳)، bore، playit.gg، Pinggy، ngrok، chisel، frp، rathole و (فقط به‌عنوان پشتیبان) Serveo و LocalToNet
+- **۲ رله‌ی مستقل:** رله‌ی TCP (Railway TCP Proxy یا VPS شخصی) و دامنه‌ی پنل (WebSocket روی ۴۴۳)
 - **۵ نوع لینک:** SOCKS5 (`socks://` و `socks5://`)، لینک یک‌لمسی تلگرام، Shadowsocks AEAD (`ss://`)، HTTP CONNECT، VLESS+WS+TLS و Trojan+WS+TLS
 - **Watchdog** با backoff نمایی و بازگشت خودکار به آخرین کانفیگ سالم
 - **بهترین کانفیگ:** امتحان خودکار ترکیب پروتکل × ترنسپورت × اسکن و ذخیره‌ی برنده
@@ -53,10 +53,9 @@
 <a id="fa-arch"></a>
 ## معماری و نحوه‌ی کار
 ```
-                       ┌─► Railway TCP Proxy ─┐
-                       ├─► دامنه‌ی پنل (WS/443)┤
-کلاینت ──► رله‌ها ─────┼─► bore / playit / ngrok / pinggy
-                       └─► chisel / frp / rathole / (serveo, localtonet)
+                       ┌─► رله‌ی TCP (Railway / VPS) ─┐
+کلاینت ──► رله‌ها ─────┤
+                       └─► دامنه‌ی پنل (WS/443) ──────┤
                                    │
                                    ▼
         gateway (نام کاربری/رمز) — تشخیص پروتکل از بایت‌های اول:
@@ -66,7 +65,6 @@
           SOCKS5 محلی Aether (127.0.0.1:1819، بدون رمز) ──► Cloudflare
 ```
 - هر رله **مستقل** است: وضعیت، پروسه، retry و خطای خودش را دارد و خرابی یکی روی بقیه اثری ندارد.
-- رله‌های **پشتیبان** (Serveo، LocalToNet) فقط وقتی راه می‌افتند که هیچ رله‌ی اصلی زنده نباشد و با برگشت رله‌ی اصلی خاموش می‌شوند.
 - VLESS/Trojan از همان پورت HTTP پنل سرو می‌شود؛ لبه‌ی Railway/Render ‏TLS را روی ۴۴۳ تمام می‌کند و ترافیک شبیه HTTPS معمولی دیده می‌شود (فقط TCP؛ UDP و mux پشتیبانی نمی‌شود).
 - نسخه‌ی Aether در Dockerfile **پین** است (`ARG AETHER_VERSION=v1.5.0`) و checksum آن هنگام بیلد بررسی می‌شود.
 
@@ -84,9 +82,9 @@ docker run -d --name aether-panel --restart unless-stopped -p 3000:3000 \
 ```
 ۱. `http://localhost:3000` را باز کنید و با `PANEL_USER` / `PANEL_PASSWORD` وارد شوید.
 ۲. دکمه‌ی بزرگ اتصال را بزنید و صبر کنید وضعیت **connected** شود.
-۳. «ساخت آدرس عمومی» را بزنید (برای رله‌ی bore پیش‌فرض، فقط همین کافی است) و لینک را در کلاینت وارد کنید.
+۳. «ساخت آدرس عمومی» را بزنید و لینک را در کلاینت وارد کنید.
 
-> رله‌ی پیش‌فرض bore.pub است و به هیچ تنظیم اضافه‌ای نیاز ندارد. برای آدرس **ثابت** و پایدار از Railway TCP Proxy یا یکی از رله‌های خودمیزبان استفاده کنید.
+> لینک‌های WebSocket با دامنه‌ی پنل کار می‌کنند. برای رله‌ی TCP، `RELAY_PORT` را روی Railway (TCP Proxy) یا VPS خودتان تنظیم کنید.
 
 <a id="fa-railway"></a>
 ## دپلوی روی Railway (گام‌به‌گام)
@@ -123,7 +121,6 @@ Railway بهترین گزینه است چون هم دامنه‌ی HTTPS (برا
 3. Railway یک `host:port` پایدار می‌دهد (مثل `roundhouse.proxy.rlwy.net:12345`) و خودش `RAILWAY_TCP_PROXY_DOMAIN`، `RAILWAY_TCP_PROXY_PORT` و `RAILWAY_TCP_APPLICATION_PORT` را تزریق می‌کند. پنل آن‌ها را می‌خواند؛ چیزی برای کپی کردن نیست.
 4. **Redeploy** کنید.
 5. اگر `RELAY_PORT` را نگذارید ولی TCP Proxy فعال باشد، از `RAILWAY_TCP_APPLICATION_PORT` استفاده می‌شود.
-6. فقط رله‌ی Railway می‌خواهید؟ `SHARE_BORE=0`.
 
 ### ۴) راه‌اندازی در پنل
 1. آدرس دامنه‌ی Railway را باز کنید و وارد شوید.
@@ -147,7 +144,7 @@ Railway بهترین گزینه است چون هم دامنه‌ی HTTPS (برا
 5. (اختیاری ولی توصیه‌شده) Disk روی `/data` و `TMPDIR=/data/tmp`.
 6. دامنه‌ی `*.onrender.com` برای VLESS/Trojan خودکار شناسایی می‌شود (`RENDER_EXTERNAL_HOSTNAME`).
 
-> Render **TCP Proxy ندارد.** رله‌ی TCP عمومی باید از bore، playit، ngrok، pinggy یا سرور خودتان (chisel/frp/rathole) بیاید.
+> Render **TCP Proxy ندارد.** رله‌ی TCP را روی Railway یا VPS خودتان اجرا کنید؛ روی Render فقط رله‌ی WebSocket کار می‌کند.
 
 <a id="fa-vps"></a>
 ## دپلوی روی VPS با Docker / Compose
@@ -202,9 +199,8 @@ volumes:
 
 ### کارت اشتراک (دسترسی از بیرون)
 - «ساخت آدرس عمومی»: gateway و رله‌ها را روشن می‌کند. فقط وقتی تونل **connected** است کار می‌کند.
-- «تنظیمات اشتراک»: نام کاربری، رمز، پورت ثابت bore و «شروع خودکار». فقط وقتی اشتراک **خاموش** است قابل تغییر است تا لینک زنده زیر دست کاربر عوض نشود.
+- «تنظیمات اشتراک»: نام کاربری، رمز و «شروع خودکار». فقط وقتی اشتراک **خاموش** است قابل تغییر است تا لینک زنده زیر دست کاربر عوض نشود.
   - نام کاربری: ۳–۳۲ کاراکتر، رمز: ۸–۶۴ کاراکتر، فقط `A-Za-z0-9._~-`
-  - پورت ثابت bore: ۱۰۲۴–۶۵۵۳۵ (خالی = انتخاب تصادفی)
 - اولویت تنظیمات: **فایل ذخیره‌شده از رابط** ← متغیرهای `SHARE_*` ← مقدار تصادفی (که ذخیره می‌شود تا ثابت بماند).
 - هر رله‌ی روشن، لینک‌هایش را نشان می‌دهد: `socks://`، `socks5://`، لینک تلگرام، `ss://`، `http://`، `vless://` و `trojan://` و یک **بلوک آماده‌ی کپی** با دکمه‌ی «کپی همه».
 
@@ -239,78 +235,16 @@ curl --socks5-hostname HOST:PORT --proxy-user USER:PASS https://www.cloudflare.c
 
 <a id="fa-relays"></a>
 ## رله‌ها: راه‌اندازی تک‌تک
-هر رله فقط وقتی فعال می‌شود که متغیرهای لازمش تنظیم باشد. باینری رله‌ها هنگام اولین استفاده در `TMPDIR/.aether/bin` دانلود می‌شود (برای override: `<NAME>_BIN=/path`، برای پین‌کردن نسخه: `<NAME>_VERSION`).
+هر رله فقط وقتی فعال می‌شود که متغیرهای لازمش تنظیم باشد.
 
-| رله | نوع | آدرس | حداقل تنظیم |
-| --- | --- | --- | --- |
-| Railway TCP Proxy | اصلی | ثابت | `RELAY_PORT` + فعال‌کردن TCP Proxy |
-| دامنه‌ی پنل (WS) | اصلی | ثابت (HTTPS/۴۴۳) | پیش‌فرض روشن؛ نیاز به دامنه‌ی HTTP پنل |
-| bore | اصلی | تصادفی یا `SHARE_PORT` | پیش‌فرض روشن (`SHARE_BORE=0` برای خاموش) |
-| playit.gg | اصلی | ثابت | `PLAYIT_SECRET`، `PLAYIT_PUBLIC_ADDR`، `GATEWAY_PORT` |
-| Pinggy | اصلی | تصادفی | `PINGGY_ENABLE=1` (یا `PINGGY_TOKEN`) |
-| ngrok TCP | اصلی | تصادفی | `NGROK_AUTHTOKEN` |
-| chisel | اصلی | ثابت | `CHISEL_SERVER`، `CHISEL_REMOTE_PORT` |
-| frp | اصلی | ثابت | `FRP_SERVER`، `FRP_REMOTE_PORT` |
-| rathole | اصلی | ثابت | `RATHOLE_SERVER`، `RATHOLE_PUBLIC_ADDR` |
-| Serveo | پشتیبان | تصادفی | `SERVEO_ENABLE=1` |
-| LocalToNet | پشتیبان | ثابت | `LOCALTONET_AUTHTOKEN`، `LOCALTONET_PUBLIC_ADDR`، `GATEWAY_PORT` |
+| رله | آدرس | حداقل تنظیم |
+| --- | --- | --- |
+| TCP Railway | ثابت | `RELAY_PORT` + فعال‌کردن TCP Proxy |
+| TCP روی VPS شخصی | ثابت | `RELAY_PORT` + `RELAY_PUBLIC_HOST` + `RELAY_PUBLIC_PORT` |
+| دامنه‌ی پنل (WS) | ثابت (HTTPS/۴۴۳) | پیش‌فرض روشن؛ نیاز به دامنه‌ی HTTP پنل |
 
 ### Railway TCP Proxy و دامنه‌ی پنل
 در بخش [Railway](#fa-railway) توضیح داده شد. مسیر WebSocket پیش‌فرض `/ws/<۱۲ کاراکتر hex>` است که از رمز اشتراک مشتق می‌شود؛ برای مسیر دلخواه `INBOUND_WS_PATH=/my-secret-path` بگذارید. برای خاموش‌کردن: `INBOUND_WS=off`، یا فقط یکی: `INBOUND_WS=vless` / `trojan`. خارج از Railway/Render: `INBOUND_PUBLIC_HOST`، `INBOUND_PUBLIC_PORT`، `INBOUND_TLS`.
-
-### bore
-پیش‌فرض روشن و مستقل از Railway است. سرور دلخواه: `BORE_SERVER`. پورت ثابت را از «تنظیمات اشتراک» (یا `SHARE_PORT`) بدهید؛ اگر اشغال بود پورت دیگری بدهید.
-
-### playit.gg و LocalToNet (نیاز به پورت محلی ثابت)
-۱. `GATEWAY_PORT=1081` را بگذارید.
-۲. در داشبورد سرویس، یک تونل TCP بسازید که به `127.0.0.1:1081` اشاره کند.
-۳. آدرس `host:port` نمایش‌داده‌شده را در `PLAYIT_PUBLIC_ADDR` (یا `LOCALTONET_PUBLIC_ADDR`) بنویسید و `PLAYIT_SECRET` (یا `LOCALTONET_AUTHTOKEN`) را بدهید.
-
-### Pinggy
-از SSH استفاده می‌کند (ایمیج `openssh-client` دارد). `PINGGY_MODE`:
-- `tcp` (پیش‌فرض): gateway را منتشر می‌کند.
-- `tls`: همان با TLS.
-- `ws`: پورت HTTP پنل را منتشر می‌کند و لینک VLESS/Trojan می‌دهد.
-
-### ngrok TCP
-نیاز به حساب تأییدشده برای TCP دارد. `NGROK_AUTHTOKEN` و در صورت نیاز `NGROK_REGION`.
-
-### chisel (سرور خودتان، روی HTTP/WebSocket)
-روی سرور:
-```bash
-chisel server --reverse --port 8080 --auth user:pass
-```
-(پشت reverse proxy/CDN با TLS بگذارید.) در پنل:
-```
-CHISEL_SERVER=https://edge.example.com
-CHISEL_AUTH=user:pass
-CHISEL_REMOTE_PORT=8443        # پورتی که روی سرور شما باز می‌شود
-```
-اختیاری: `CHISEL_FINGERPRINT`، `CHISEL_HEADERS=Host:cdn.example.com,X-Token:abc`، `CHISEL_HOST_HEADER`، `CHISEL_TLS_SKIP_VERIFY`، `CHISEL_WS_REMOTE_PORT` (انتشار پورت HTTP پنل روی سرور برای VLESS/Trojan خودتان).
-
-### frp
-روی سرور (`frps.toml`):
-```toml
-bindPort = 7000
-auth.method = "token"
-auth.token = "YOUR_TOKEN"
-```
-در پنل: `FRP_SERVER=1.2.3.4:7000`، `FRP_TOKEN=YOUR_TOKEN`، `FRP_REMOTE_PORT=6000`، `FRP_TRANSPORT=websocket` (یا `tcp` / `wss`). پورت `6000` باید در فایروال سرور باز و در `allowPorts` مجاز باشد.
-
-### rathole
-روی سرور (`server.toml`):
-```toml
-[server]
-bind_addr = "0.0.0.0:2333"
-default_token = "YOUR_TOKEN"
-
-[server.services.aether]
-bind_addr = "0.0.0.0:5000"
-```
-در پنل: `RATHOLE_SERVER=1.2.3.4:2333`، `RATHOLE_PUBLIC_ADDR=1.2.3.4:5000`، `RATHOLE_TOKEN=YOUR_TOKEN`، `RATHOLE_SERVICE=aether` (باید با نام سرویس سرور یکی باشد). ترنسپورت: `RATHOLE_TRANSPORT=tcp|noise|websocket`.
-
-### Serveo (پشتیبان)
-`SERVEO_ENABLE=1`. پایداری کمی دارد و فقط وقتی هیچ رله‌ی اصلی زنده نیست راه می‌افتد.
 
 ### پروتکل‌های gateway
 `SHARE_PROTOCOLS=socks,http,ss` (پیش‌فرض) تعیین می‌کند هر پورت TCP کدام پروتکل‌ها را بپذیرد. رمز Shadowsocks همان رمز اشتراک است و رمزگذار با `SS_CIPHER` (`chacha20-ietf-poly1305` پیش‌فرض، `aes-256-gcm`، `aes-128-gcm`) انتخاب می‌شود.
@@ -358,30 +292,18 @@ bind_addr = "0.0.0.0:5000"
 | متغیر | پیش‌فرض | توضیح |
 | --- | --- | --- |
 | `SHARE_USERNAME`، `SHARE_PASSWORD` | تصادفی | مقدار اولیه (تا قبل از ذخیره از رابط) |
-| `SHARE_PORT` | — | پورت ثابت bore |
 | `SHARE_AUTO` | — | `1` = رله‌ها همراه تونل روشن شوند |
-| `SHARE_BORE` | روشن | `0` = bore خاموش |
 | `SHARE_PROTOCOLS` | `socks,http,ss` | پروتکل‌های gateway |
 | `SS_CIPHER` | `chacha20-ietf-poly1305` | رمزگذار Shadowsocks |
-| `GATEWAY_PORT` | — | پورت محلی ثابت gateway (برای playit و LocalToNet الزامی) |
+| `GATEWAY_PORT` | — | پورت محلی ثابت gateway (اختیاری) |
 
 **رله‌ها**
 
 | متغیر | توضیح |
 | --- | --- |
-| `RELAY_PORT`، `RELAY_BIND_HOST` (`0.0.0.0`) | رله‌ی Railway TCP |
+| `RELAY_PORT`، `RELAY_BIND_HOST` (`0.0.0.0`) | رله‌ی TCP (Railway / VPS) |
 | `RELAY_PUBLIC_HOST`، `RELAY_PUBLIC_PORT` | آدرس عمومی رله‌ی TCP (خارج از Railway) |
 | `INBOUND_WS` (`vless,trojan` / `off`)، `INBOUND_WS_PATH`، `INBOUND_PUBLIC_HOST`، `INBOUND_PUBLIC_PORT`، `INBOUND_TLS` | VLESS/Trojan روی WebSocket |
-| `BORE_SERVER` (`bore.pub`)، `BORE_VERSION` | bore |
-| `PLAYIT_SECRET`، `PLAYIT_PUBLIC_ADDR`، `PLAYIT_ARGS`، `PLAYIT_VERSION` | playit.gg |
-| `PINGGY_ENABLE`، `PINGGY_TOKEN`، `PINGGY_MODE` (`tcp/tls/ws`)، `PINGGY_SERVER` (`a.pinggy.io`) | Pinggy |
-| `NGROK_AUTHTOKEN`، `NGROK_REGION` | ngrok |
-| `CHISEL_SERVER`، `CHISEL_AUTH`، `CHISEL_REMOTE_PORT`، `CHISEL_PUBLIC_HOST`، `CHISEL_FINGERPRINT`، `CHISEL_HEADERS`، `CHISEL_HOST_HEADER`، `CHISEL_TLS_SKIP_VERIFY`، `CHISEL_KEEPALIVE`، `CHISEL_WS_REMOTE_PORT`، `CHISEL_VERSION` | chisel |
-| `FRP_SERVER`، `FRP_TOKEN`، `FRP_TRANSPORT`، `FRP_REMOTE_PORT`، `FRP_PUBLIC_HOST`، `FRP_VERSION` | frp |
-| `RATHOLE_SERVER`، `RATHOLE_PUBLIC_ADDR`، `RATHOLE_TOKEN`، `RATHOLE_SERVICE`، `RATHOLE_TRANSPORT`، `RATHOLE_TLS`، `RATHOLE_NOISE_PATTERN`، `RATHOLE_REMOTE_PUBLIC_KEY`، `RATHOLE_VERSION` | rathole |
-| `SERVEO_ENABLE`، `SERVEO_HOST` | Serveo (پشتیبان) |
-| `LOCALTONET_AUTHTOKEN`، `LOCALTONET_PUBLIC_ADDR` | LocalToNet (پشتیبان) |
-| `<NAME>_BIN` | مسیر دستی باینری هر رله |
 
 **Watchdog و بهترین کانفیگ**
 
@@ -434,7 +356,6 @@ bind_addr = "0.0.0.0:5000"
 - پورت `RELAY_PORT` از اینترنت در دسترس است؛ تنها محافظ آن نام کاربری/رمز است. از رمز قوی استفاده کنید و در صورت نیاز فقط Shadowsocks را فعال کنید: `SHARE_PROTOCOLS=ss`.
 - مسیر WebSocket (VLESS/Trojan) عمداً Basic Auth ندارد (کلاینت‌ها نمی‌توانند) و فقط با مسیر مخفی و UUID/رمز مشتق‌شده از رمز اشتراک محافظت می‌شود؛ آن را لو ندهید.
 - SOCKS5 و HTTP CONNECT رمزنگاری‌شده نیستند؛ برای شبکه‌های ناامن از Shadowsocks/VLESS/Trojan استفاده کنید.
-- رله‌های Pinggy و Serveo با `StrictHostKeyChecking=no` اجرا می‌شوند و باینری رله‌ها (به‌جز Aether) بدون checksum دانلود می‌شوند؛ اگر حساس هستید باینری را خودتان در ایمیج بگذارید و `<NAME>_BIN` را ست کنید.
 - اعلان `subscription_changed` رمز را شامل می‌شود؛ فقط به کانال خصوصی بفرستید.
 
 <a id="fa-trouble"></a>
@@ -448,12 +369,9 @@ bind_addr = "0.0.0.0:5000"
 | «فایل اجرایی Aether پیدا نشد» | در Docker نباید رخ دهد؛ کارت نصب را بزنید یا `AETHER_BIN` را بررسی کنید |
 | تونل در scanning/connecting گیر می‌کند | حالت اسکن یا noize را عوض کنید، «بهترین کانفیگ» را بزنید؛ watchdog بعد از ۵ دقیقه خودش ری‌استارت می‌کند |
 | «ابتدا تونل را وصل کنید» هنگام ساخت آدرس | اشتراک فقط وقتی تونل connected است شروع می‌شود |
-| «No relay is enabled…» | حداقل یک رله را فعال کنید (`RELAY_PORT`، دامنه‌ی پنل، bore یا یکی از providerها) |
+| «No relay is enabled…» | حداقل یک رله را فعال کنید (`RELAY_PORT` یا دامنه‌ی پنل) |
 | رله‌ی Railway «pending» | TCP Proxy را فعال کنید یا `RELAY_PUBLIC_HOST/PORT` بدهید |
 | رله‌ی Railway «error» | `RELAY_PORT` با `PORT` یا `PORT+1` یکی است یا اشغال است؛ عوضش کنید |
-| پورت bore ثابت نمی‌ماند | «پورت ثابت» را پر کنید؛ اگر اشغال بود پورت دیگری بدهید |
-| playit/LocalToNet خطای «fixed local port» | `GATEWAY_PORT` را بگذارید و تونل داشبورد را به آن اشاره دهید |
-| رله‌ی chisel/frp/rathole وصل نمی‌شود | آدرس سرور، توکن، پورت فایروال و نام سرویس (rathole) را بررسی کنید؛ لاگ خطای همان رله در پنل دیده می‌شود |
 | VLESS/Trojan وصل نمی‌شود | اشتراک باید روشن باشد؛ دامنه‌ی HTTPS و مسیر درست باشد؛ پشت reverse proxy هدر Upgrade پاس داده شود |
 | «Too many requests» | محدودیت نرخ APIهای سنگین؛ چند ثانیه صبر کنید |
 | بعد از ری‌استارت تونل وصل نمی‌شود | `AUTO_START=1` و وجود باینری را بررسی کنید |
@@ -465,11 +383,11 @@ bind_addr = "0.0.0.0:5000"
 pnpm install
 pnpm dev            # http://localhost:3000 (همراه PANEL_USER و PANEL_PASSWORD)
 pnpm typecheck
-npm test            # فقط Node 22+؛ از mock bore و aether/curl ساختگی استفاده می‌کند
+npm test            # فقط Node 22+؛ از aether/curl ساختگی استفاده می‌کند
 pnpm dev:ws         # اجرای server.mjs برای آزمایش WebSocket inbound
 ```
 - GitHub Actions (`.github/workflows/ci.yml`): typecheck ← تست‌ها ← بیلد Docker.
-- تست‌ها: لینک‌های اشتراک و تغییر آن‌ها با mock bore، پورت ثابت، رله‌ی Railway، پروتکل‌های gateway (SOCKS5/HTTP/Shadowsocks)، inbound، AUTO_START، watchdog، بهترین کانفیگ، rate limit و جداسازی رله‌ها.
+- تست‌ها: پیکربندی رله‌ها، لینک‌ها، پروتکل‌های gateway (SOCKS5/HTTP/Shadowsocks)، inbound، AUTO_START، watchdog، بهترین کانفیگ و rate limit.
 - ساختار: `web/lib/` منطق سرور، `web/app/api/aether/` مسیرهای API، `web/components/` رابط، `web/server.mjs` ورودی تولید، `tests/` تست‌ها.
 
 ---
@@ -508,7 +426,7 @@ pnpm dev:ws         # اجرای server.mjs برای آزمایش WebSocket inbo
 ## Features
 - One-button start/stop; protocol (MASQUE, WireGuard, Gool, MiM), transport (h2/h3), scan mode, IP version, noize, port, HTTP proxy, quick reconnect
 - Live status, selected gateway, exit IP/country, latency, uptime, logs and a connection test
-- **11 independent relays:** Railway TCP Proxy, panel domain (WebSocket on 443), bore, playit.gg, Pinggy, ngrok, chisel, frp, rathole and (fallback only) Serveo and LocalToNet
+- **2 independent relays:** TCP relay (Railway TCP Proxy or your personal VPS) and the panel domain (WebSocket on 443)
 - **Link types:** SOCKS5 (`socks://`, `socks5://`), one-tap Telegram link, Shadowsocks AEAD (`ss://`), HTTP CONNECT, VLESS+WS+TLS and Trojan+WS+TLS
 - **Watchdog** with exponential backoff and automatic fallback to the last known-good config
 - **Find best config:** tries protocol × transport × scan, saves the winner
@@ -520,10 +438,9 @@ pnpm dev:ws         # اجرای server.mjs برای آزمایش WebSocket inbo
 <a id="en-arch"></a>
 ## Architecture
 ```
-                       ┌─► Railway TCP Proxy ─┐
-                       ├─► panel domain (WS/443)┤
-client ──► relays ─────┼─► bore / playit / ngrok / pinggy
-                       └─► chisel / frp / rathole / (serveo, localtonet)
+                       ┌─► TCP relay (Railway / VPS) ─┐
+client ──► relays ─────┤
+                       └─► panel domain (WS/443) ─────┤
                                    │
                                    ▼
         gateway (username/password) — protocol sniffed from the first bytes:
@@ -533,7 +450,6 @@ client ──► relays ─────┼─► bore / playit / ngrok / pinggy
           local Aether SOCKS5 (127.0.0.1:1819, no auth) ──► Cloudflare
 ```
 - Every relay is **independent**: own phase, process, retry timer and error; one failing never affects another.
-- **Fallback** relays (Serveo, LocalToNet) start only while no primary relay is live and stop when one comes back.
 - VLESS/Trojan is served on the panel's own HTTP port; the Railway/Render edge terminates TLS on 443, so it looks like ordinary HTTPS (TCP only; no UDP or mux).
 - The Aether version is **pinned** in the Dockerfile (`ARG AETHER_VERSION=v1.5.0`) and its checksum is verified at build time.
 
@@ -551,9 +467,9 @@ docker run -d --name aether-panel --restart unless-stopped -p 3000:3000 \
 ```
 1. Open `http://localhost:3000` and sign in with `PANEL_USER` / `PANEL_PASSWORD`.
 2. Press the big connect button and wait for **connected**.
-3. Press the share button (the default bore.pub relay needs no extra configuration) and import the link in your client.
+3. Press the share button and import the link in your client.
 
-> bore.pub is the default relay and needs no setup. For a **fixed**, stable address use Railway TCP Proxy or a self-hosted relay.
+> WebSocket links work through the panel domain. For the TCP relay set `RELAY_PORT` on Railway (TCP Proxy) or on your own VPS.
 
 <a id="en-railway"></a>
 ## Deploy on Railway (step by step)
@@ -590,7 +506,6 @@ Railway is the best fit: it gives you both an HTTPS domain (for VLESS/Trojan) an
 3. Railway gives a stable `host:port` (e.g. `roundhouse.proxy.rlwy.net:12345`) and injects `RAILWAY_TCP_PROXY_DOMAIN`, `RAILWAY_TCP_PROXY_PORT` and `RAILWAY_TCP_APPLICATION_PORT`. The panel reads them; nothing to copy.
 4. **Redeploy**.
 5. If `RELAY_PORT` is unset but a TCP Proxy exists, `RAILWAY_TCP_APPLICATION_PORT` is used.
-6. Want only the Railway relay? Set `SHARE_BORE=0`.
 
 ### 4) Use the panel
 1. Open the Railway domain and sign in.
@@ -614,7 +529,7 @@ Railway is the best fit: it gives you both an HTTPS domain (for VLESS/Trojan) an
 5. (Recommended) A disk at `/data` plus `TMPDIR=/data/tmp`.
 6. The `*.onrender.com` domain is picked up automatically for VLESS/Trojan (`RENDER_EXTERNAL_HOSTNAME`).
 
-> Render has **no TCP Proxy.** The public TCP relay must come from bore, playit, ngrok, pinggy or your own server (chisel/frp/rathole).
+> Render has **no TCP Proxy.** Run the TCP relay on Railway or your own VPS; on Render only the WebSocket relay works.
 
 <a id="en-vps"></a>
 ## Deploy on a VPS with Docker / Compose
@@ -669,9 +584,8 @@ If the Aether binary is missing (outside Docker) an install card appears; the bu
 
 ### Share card (outside access)
 - Share button: starts the gateway and relays. Works only while the tunnel is **connected**.
-- "Share settings": username, password, fixed bore port and "auto start". Editable only while sharing is **off**, so a live link never changes under you.
+- "Share settings": username, password and "auto start". Editable only while sharing is **off**, so a live link never changes under you.
   - username: 3–32 chars, password: 8–64 chars, only `A-Za-z0-9._~-`
-  - fixed bore port: 1024–65535 (empty = random)
 - Priority: **file saved from the UI** → `SHARE_*` variables → random values (then saved so they stay stable).
 - Every running relay shows its links: `socks://`, `socks5://`, Telegram link, `ss://`, `http://`, `vless://`, `trojan://` and a **copy-ready block** with a "Copy all" button.
 
@@ -706,78 +620,15 @@ The output should include `ip=` and `warp=`.
 
 <a id="en-relays"></a>
 ## Relays: setting each one up
-A relay activates only when its required variables are set. Relay binaries are downloaded on first use into `TMPDIR/.aether/bin` (override with `<NAME>_BIN=/path`, pin with `<NAME>_VERSION`).
 
 | Relay | Tier | Address | Minimum setup |
 | --- | --- | --- | --- |
-| Railway TCP Proxy | primary | fixed | `RELAY_PORT` + enable TCP Proxy |
-| Panel domain (WS) | primary | fixed (HTTPS/443) | on by default; needs the panel's HTTP domain |
-| bore | primary | random or `SHARE_PORT` | on by default (`SHARE_BORE=0` to disable) |
-| playit.gg | primary | fixed | `PLAYIT_SECRET`, `PLAYIT_PUBLIC_ADDR`, `GATEWAY_PORT` |
-| Pinggy | primary | random | `PINGGY_ENABLE=1` (or `PINGGY_TOKEN`) |
-| ngrok TCP | primary | random | `NGROK_AUTHTOKEN` |
-| chisel | primary | fixed | `CHISEL_SERVER`, `CHISEL_REMOTE_PORT` |
-| frp | primary | fixed | `FRP_SERVER`, `FRP_REMOTE_PORT` |
-| rathole | primary | fixed | `RATHOLE_SERVER`, `RATHOLE_PUBLIC_ADDR` |
-| Serveo | fallback | random | `SERVEO_ENABLE=1` |
-| LocalToNet | fallback | fixed | `LOCALTONET_AUTHTOKEN`, `LOCALTONET_PUBLIC_ADDR`, `GATEWAY_PORT` |
+| TCP Railway | fixed | `RELAY_PORT` + enable TCP Proxy |
+| TCP on a personal VPS | fixed | `RELAY_PORT` + `RELAY_PUBLIC_HOST` + `RELAY_PUBLIC_PORT` |
+| Panel domain (WS) | fixed (HTTPS/443) | on by default; needs the panel's HTTP domain |
 
 ### Railway TCP Proxy and panel domain
 Covered in [Railway](#en-railway). The default WebSocket path is `/ws/<12 hex chars>` derived from the share password; set `INBOUND_WS_PATH=/my-secret-path` for a custom one. Disable with `INBOUND_WS=off`, or keep one: `INBOUND_WS=vless` / `trojan`. Outside Railway/Render set `INBOUND_PUBLIC_HOST`, `INBOUND_PUBLIC_PORT`, `INBOUND_TLS`.
-
-### bore
-On by default and independent of Railway. Custom server: `BORE_SERVER`. Set the fixed port from "Share settings" (or `SHARE_PORT`); pick another if it is taken.
-
-### playit.gg and LocalToNet (need a fixed local port)
-1. Set `GATEWAY_PORT=1081`.
-2. In the service dashboard create a TCP tunnel pointing at `127.0.0.1:1081`.
-3. Put the `host:port` it shows into `PLAYIT_PUBLIC_ADDR` (or `LOCALTONET_PUBLIC_ADDR`) and set `PLAYIT_SECRET` (or `LOCALTONET_AUTHTOKEN`).
-
-### Pinggy
-Uses SSH (the image ships `openssh-client`). `PINGGY_MODE`:
-- `tcp` (default): publishes the gateway.
-- `tls`: same with TLS.
-- `ws`: publishes the panel's HTTP port and yields VLESS/Trojan links.
-
-### ngrok TCP
-TCP endpoints require a verified ngrok account. Set `NGROK_AUTHTOKEN` and optionally `NGROK_REGION`.
-
-### chisel (your own server, over HTTP/WebSocket)
-On the server:
-```bash
-chisel server --reverse --port 8080 --auth user:pass
-```
-(put it behind a TLS reverse proxy/CDN). In the panel:
-```
-CHISEL_SERVER=https://edge.example.com
-CHISEL_AUTH=user:pass
-CHISEL_REMOTE_PORT=8443        # port opened on your server
-```
-Optional: `CHISEL_FINGERPRINT`, `CHISEL_HEADERS=Host:cdn.example.com,X-Token:abc`, `CHISEL_HOST_HEADER`, `CHISEL_TLS_SKIP_VERIFY`, `CHISEL_WS_REMOTE_PORT` (also expose the panel HTTP port on your server for your own VLESS/Trojan reverse proxy).
-
-### frp
-On the server (`frps.toml`):
-```toml
-bindPort = 7000
-auth.method = "token"
-auth.token = "YOUR_TOKEN"
-```
-In the panel: `FRP_SERVER=1.2.3.4:7000`, `FRP_TOKEN=YOUR_TOKEN`, `FRP_REMOTE_PORT=6000`, `FRP_TRANSPORT=websocket` (or `tcp` / `wss`). Port `6000` must be open in the server firewall and allowed in `allowPorts`.
-
-### rathole
-On the server (`server.toml`):
-```toml
-[server]
-bind_addr = "0.0.0.0:2333"
-default_token = "YOUR_TOKEN"
-
-[server.services.aether]
-bind_addr = "0.0.0.0:5000"
-```
-In the panel: `RATHOLE_SERVER=1.2.3.4:2333`, `RATHOLE_PUBLIC_ADDR=1.2.3.4:5000`, `RATHOLE_TOKEN=YOUR_TOKEN`, `RATHOLE_SERVICE=aether` (must match the server's service name). Transport: `RATHOLE_TRANSPORT=tcp|noise|websocket`.
-
-### Serveo (fallback)
-`SERVEO_ENABLE=1`. Not very reliable; starts only while no primary relay is live.
 
 ### Gateway protocols
 `SHARE_PROTOCOLS=socks,http,ss` (default) sets which protocols every TCP port accepts. The Shadowsocks password is the share password and the cipher is chosen with `SS_CIPHER` (`chacha20-ietf-poly1305` default, `aes-256-gcm`, `aes-128-gcm`).
@@ -825,30 +676,18 @@ Full commented sample: `.env.example`.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SHARE_USERNAME`, `SHARE_PASSWORD` | random | initial values (until saved from the UI) |
-| `SHARE_PORT` | — | fixed bore port |
 | `SHARE_AUTO` | — | `1` starts relays with the tunnel |
-| `SHARE_BORE` | on | `0` disables bore |
 | `SHARE_PROTOCOLS` | `socks,http,ss` | gateway protocols |
 | `SS_CIPHER` | `chacha20-ietf-poly1305` | Shadowsocks cipher |
-| `GATEWAY_PORT` | — | fixed local gateway port (required for playit and LocalToNet) |
+| `GATEWAY_PORT` | — | fixed local gateway port (optional) |
 
 **Relays**
 
 | Variable | Description |
 | --- | --- |
-| `RELAY_PORT`, `RELAY_BIND_HOST` (`0.0.0.0`) | Railway TCP relay |
+| `RELAY_PORT`, `RELAY_BIND_HOST` (`0.0.0.0`) | TCP relay (Railway / VPS) |
 | `RELAY_PUBLIC_HOST`, `RELAY_PUBLIC_PORT` | public address of the TCP relay (outside Railway) |
 | `INBOUND_WS` (`vless,trojan` / `off`), `INBOUND_WS_PATH`, `INBOUND_PUBLIC_HOST`, `INBOUND_PUBLIC_PORT`, `INBOUND_TLS` | VLESS/Trojan over WebSocket |
-| `BORE_SERVER` (`bore.pub`), `BORE_VERSION` | bore |
-| `PLAYIT_SECRET`, `PLAYIT_PUBLIC_ADDR`, `PLAYIT_ARGS`, `PLAYIT_VERSION` | playit.gg |
-| `PINGGY_ENABLE`, `PINGGY_TOKEN`, `PINGGY_MODE` (`tcp/tls/ws`), `PINGGY_SERVER` (`a.pinggy.io`) | Pinggy |
-| `NGROK_AUTHTOKEN`, `NGROK_REGION` | ngrok |
-| `CHISEL_SERVER`, `CHISEL_AUTH`, `CHISEL_REMOTE_PORT`, `CHISEL_PUBLIC_HOST`, `CHISEL_FINGERPRINT`, `CHISEL_HEADERS`, `CHISEL_HOST_HEADER`, `CHISEL_TLS_SKIP_VERIFY`, `CHISEL_KEEPALIVE`, `CHISEL_WS_REMOTE_PORT`, `CHISEL_VERSION` | chisel |
-| `FRP_SERVER`, `FRP_TOKEN`, `FRP_TRANSPORT`, `FRP_REMOTE_PORT`, `FRP_PUBLIC_HOST`, `FRP_VERSION` | frp |
-| `RATHOLE_SERVER`, `RATHOLE_PUBLIC_ADDR`, `RATHOLE_TOKEN`, `RATHOLE_SERVICE`, `RATHOLE_TRANSPORT`, `RATHOLE_TLS`, `RATHOLE_NOISE_PATTERN`, `RATHOLE_REMOTE_PUBLIC_KEY`, `RATHOLE_VERSION` | rathole |
-| `SERVEO_ENABLE`, `SERVEO_HOST` | Serveo (fallback) |
-| `LOCALTONET_AUTHTOKEN`, `LOCALTONET_PUBLIC_ADDR` | LocalToNet (fallback) |
-| `<NAME>_BIN` | manual binary path for any relay |
 
 **Watchdog and best-config**
 
@@ -901,7 +740,6 @@ All routes are behind Basic Auth (except `/healthz`).
 - `RELAY_PORT` is reachable from the internet and the username/password is its only protection. Use strong credentials and, if you like, enable only Shadowsocks: `SHARE_PROTOCOLS=ss`.
 - The WebSocket path (VLESS/Trojan) intentionally has no Basic Auth (clients can't send it) and is protected only by the secret path and the UUID/password derived from the share password; do not leak them.
 - SOCKS5 and HTTP CONNECT are not encrypted; use Shadowsocks/VLESS/Trojan on untrusted networks.
-- Pinggy and Serveo run with `StrictHostKeyChecking=no`, and relay binaries (other than Aether) are downloaded without checksum verification; if that concerns you, bake the binaries into the image and set `<NAME>_BIN`.
 - `subscription_changed` notifications include the credentials; send them to private channels only.
 
 <a id="en-trouble"></a>
@@ -915,12 +753,9 @@ All routes are behind Basic Auth (except `/healthz`).
 | "Aether binary not found" | shouldn't happen in Docker; press the install card or check `AETHER_BIN` |
 | Tunnel stuck in scanning/connecting | change scan mode or noize, run "Find best config"; the watchdog restarts it after 5 minutes |
 | "Connect the tunnel first" when sharing | sharing starts only while the tunnel is connected |
-| "No relay is enabled…" | enable at least one relay (`RELAY_PORT`, panel domain, bore or a provider) |
+| "No relay is enabled…" | enable at least one relay (`RELAY_PORT` or the panel domain) |
 | Railway relay "pending" | enable TCP Proxy or set `RELAY_PUBLIC_HOST/PORT` |
 | Railway relay "error" | `RELAY_PORT` equals `PORT` or `PORT+1`, or is in use; change it |
-| bore port keeps changing | fill "fixed port"; pick another if it is taken |
-| playit/LocalToNet "fixed local port" error | set `GATEWAY_PORT` and point the dashboard tunnel at it |
-| chisel/frp/rathole won't connect | check server address, token, firewall port and service name (rathole); the relay's own error is shown in the panel |
 | VLESS/Trojan won't connect | sharing must be on; HTTPS domain and path must be right; the reverse proxy must forward the Upgrade header |
 | "Too many requests" | rate limit on heavy endpoints; wait a few seconds |
 | Tunnel not up after restart | check `AUTO_START=1` and that the binary exists |
@@ -932,11 +767,11 @@ All routes are behind Basic Auth (except `/healthz`).
 pnpm install
 pnpm dev            # http://localhost:3000 (set PANEL_USER and PANEL_PASSWORD)
 pnpm typecheck
-npm test            # Node 22+ only; uses a mock bore and fake aether/curl
+npm test            # Node 22+ only; uses fake aether/curl
 pnpm dev:ws         # run server.mjs to try the WebSocket inbound
 ```
 - GitHub Actions (`.github/workflows/ci.yml`): typecheck → tests → Docker build.
-- Tests cover subscription links and change detection against a mock bore, fixed ports, the Railway relay, gateway protocols (SOCKS5/HTTP/Shadowsocks), the inbound, AUTO_START, the watchdog, best-config, rate limiting and relay isolation.
+- Tests cover relay config, links, gateway protocols (SOCKS5/HTTP/Shadowsocks), the inbound, AUTO_START, the watchdog, best-config and rate limiting.
 - Layout: `web/lib/` server logic, `web/app/api/aether/` API routes, `web/components/` UI, `web/server.mjs` production entry point, `tests/` tests.
 
 ---
